@@ -1,0 +1,21 @@
+[package]
+name = "lob"
+version = "0.1.0"
+edition = "2021"
+
+[[bench]]
+name = "lob_benchmark"
+harness = false
+
+[dependencies]
+chrono = "0.4.38"
+itertools = "0.13.0"
+rand = "0.8.5"
+stable-vec = "0.4.1"
+thiserror = "1.0.64"
+
+[dev-dependencies]
+criterion = "0.5.1"
+
+[profile.bench]
+debug = true
