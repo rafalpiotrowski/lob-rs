@@ -33,7 +33,7 @@ type LevelVec = StableVec<Level>;
 // this will only grow, since each limit need to point to a stable index in the stable level vec
 type LevelMap = HashMap<Price, LevelIndex>;
 
-// map of Order ID -> LimitOrder that contains full order data 
+// map of Order ID -> LimitOrder that contains full order data
 type OrderMap = HashMap<Oid, LimitOrder>;
 
 /// Order
@@ -688,7 +688,9 @@ mod tests_order_book {
         );
         let _ = order_book.execute(order);
         assert_eq!(order_book.orders.len(), 1);
-        let order = order_book.cancel_order(crate::primitives::Oid::new(1)).unwrap();
+        let order = order_book
+            .cancel_order(crate::primitives::Oid::new(1))
+            .unwrap();
         assert_eq!(order_book.orders.len(), 0);
         assert_eq!(order.order_id, crate::primitives::Oid::new(1));
         assert_eq!(order.status, crate::CancellationStatus::Cancelled);
@@ -702,7 +704,9 @@ mod tests_order_book {
         );
         let _ = order_book.execute(order);
         assert_eq!(order_book.orders.len(), 1);
-        let order = order_book.cancel_order(crate::primitives::Oid::new(2)).unwrap();
+        let order = order_book
+            .cancel_order(crate::primitives::Oid::new(2))
+            .unwrap();
         assert_eq!(order_book.orders.len(), 0);
         assert_eq!(order.order_id, crate::primitives::Oid::new(2));
         assert_eq!(order.status, crate::CancellationStatus::Cancelled);
