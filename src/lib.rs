@@ -12,7 +12,6 @@
 //!
 
 mod primitives;
-pub mod utils;
 use itertools::Itertools;
 use stable_vec::StableVec;
 use std::collections::{HashMap, VecDeque};
@@ -189,10 +188,8 @@ impl Level {
 }
 
 /// Limits (i.e. Price): 21.0453 to orders at that price
-#[derive(Debug, Clone)]
+#[derive(Debug, Default)]
 pub struct Limits {
-    /// side of the book
-    side: OrderSide,
     /// map of LimitIndex -> Level (i.e. queue of orders at that Limit level)
     /// this will allow for O(1) lookup of Limit levels
     /// when inserting an order at a specific Limit level
@@ -206,16 +203,6 @@ pub struct Limits {
 }
 
 impl Limits {
-    /// Create a new Limit map
-    pub fn new(side: OrderSide) -> Self {
-        Limits {
-            side,
-            level_map: HashMap::new(),
-            levels: StableVec::new(),
-            best: None,
-        }
-    }
-
     /// depends on the side, i.e. for ask find smallest Limit, for bid find largest Limit
     pub fn get_best_limit(&self) -> Option<Price> {
         if let Some(index) = self.best {
@@ -249,11 +236,11 @@ impl Limits {
     /// since we postopne removal of cancelled orders when filling the new order
     /// all we need to do is to update the total level volume so it is in sync
     pub fn cancel_order(&mut self, order: &LimitOrder) {
-        self.level_map.get(&order.price).map(|index| {
+        if let Some(index) = self.level_map.get(&order.price) {
             if let Some(level) = self.levels.get_mut(*index) {
                 level.cancell_order(order);
             }
-        });
+        }
     }
 }
 
@@ -267,6 +254,7 @@ pub enum PlaceOrderError {
 
 /// Trade
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct Trade {
     order_id: Oid,
     volume: Volume,
@@ -287,7 +275,7 @@ impl Trade {
 
     /// Add an execution to the trade
     pub fn add_execution(&mut self, execution: Execution) {
-        self.filled_volume += execution.volume.into();
+        self.filled_volume += execution.volume;
         self.executions.push(execution)
     }
 }
@@ -322,6 +310,7 @@ pub enum CancellationStatus {
 
 /// Cancellation report
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct CancellationReport {
     order_id: Oid,
     status: CancellationStatus,
@@ -345,7 +334,7 @@ pub struct Spread(f64);
 /// Limit Order Book
 /// Trades are made when highest bid Limit is greater than or equal to the lowest ask Limit (spread is crossed)
 /// If order cannot be filled immediately, it is added to the book
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct OrderBook {
     // Bid side of the book, represents open offers to buy an asset
     bids: Limits,
@@ -358,16 +347,6 @@ pub struct OrderBook {
 }
 
 impl OrderBook {
-    /// Create a new order book
-    pub fn new() -> Self {
-        OrderBook {
-            bids: Limits::new(OrderSide::Buy),
-            asks: Limits::new(OrderSide::Sell),
-            orders: HashMap::new(),
-            spread: None,
-        }
-    }
-
     /// takes an order object and either fills it or places it in the limit
     /// book, prints trades that have taken place as a result of the order
     pub fn execute(&mut self, order: &Order) -> Result<Trade, PlaceOrderError> {
@@ -400,7 +379,7 @@ impl OrderBook {
     }
 
     fn execute_buy(&mut self, order: &Order) -> Result<Trade, PlaceOrderError> {
-        let trade = self.fill_buy_order(&order)?;
+        let trade = self.fill_buy_order(order)?;
         match order.kind {
             OrderType::Market => {
                 // we do not need to add the order to the book
@@ -420,22 +399,24 @@ impl OrderBook {
     }
 
     fn update_best_limit(&mut self) {
-        self.bids
+        if let Some(max) = self
+            .bids
             .levels
             .values()
             .filter(|l| l.total_volume > 0.into())
             .max()
-            .map(|max| {
-                self.bids.best = self.bids.level_map.get(&max.price).copied();
-            });
-        self.asks
+        {
+            self.bids.best = self.bids.level_map.get(&max.price).copied();
+        }
+        if let Some(min) = self
+            .asks
             .levels
             .values()
             .filter(|l| l.total_volume > 0.into())
             .min()
-            .map(|min| {
-                self.asks.best = self.asks.level_map.get(&min.price).copied();
-            });
+        {
+            self.asks.best = self.asks.level_map.get(&min.price).copied();
+        }
     }
 
     fn execute_sell(&mut self, order: &Order) -> Result<Trade, PlaceOrderError> {
@@ -475,52 +456,47 @@ impl OrderBook {
             .sorted();
 
         'top: for l in sorted {
-            loop {
-                // peek order at front of the level
-                if let Some(oid) = l.orders.front() {
-                    // todo: remove might trigger memcpy
-                    // although we need to get the owned value otherwise we will be borrowing self hence problem with borrow checker
-                    let Some(mut sell_order) = self.orders.remove(&oid) else {
-                        // if there is no order then it might have been cancelled
-                        // and removed from the map, and since we pospone the removal of orders from the level
-                        // till we encounter such order, we can safely remove the order from the level
-                        l.orders.pop_front();
-                        continue;
-                    };
-                    let sell_volume = sell_order.volume;
-                    if sell_volume <= buy_volume {
-                        // fill the sell order
-                        trade.add_execution(Execution::new(
-                            sell_order.id,
-                            sell_order.price,
-                            sell_volume.into(),
-                        ));
-                        // remove order from the level
-                        l.orders.pop_front();
-                        l.cancell_order(&sell_order);
-                        sell_order.volume = Volume::ZERO;
-                        buy_volume -= sell_volume;
-                    } else {
-                        // fill the buy order, put the order back to the book
-                        let execution = Execution::new(sell_order.id, sell_order.price, buy_volume);
-                        trade.add_execution(execution);
-                        sell_order.volume -= buy_volume;
-                        buy_volume = Volume::ZERO;
-                    }
-                    // we should put back the sell order if it was not completely filled
-                    if !sell_order.volume.is_zero() {
-                        self.orders.insert(sell_order.id, sell_order);
-                    }
-                    // if buy order was filled completely, we can break the loop
-                    if buy_volume.is_zero() {
-                        break 'top;
-                    }
-                    // otherwise we still have volume to fill
+            // peek order at front of the level
+            while let Some(oid) = l.orders.front() {
+                // todo: remove might trigger memcpy
+                // although we need to get the owned value otherwise we will be borrowing self hence problem with borrow checker
+                let Some(mut sell_order) = self.orders.remove(oid) else {
+                    // if there is no order then it might have been cancelled
+                    // and removed from the map, and since we pospone the removal of orders from the level
+                    // till we encounter such order, we can safely remove the order from the level
+                    l.orders.pop_front();
+                    continue;
+                };
+                let sell_volume = sell_order.volume;
+                if sell_volume <= buy_volume {
+                    // fill the sell order
+                    trade.add_execution(Execution::new(
+                        sell_order.id,
+                        sell_order.price,
+                        sell_volume,
+                    ));
+                    // remove order from the level
+                    l.orders.pop_front();
+                    l.cancell_order(&sell_order);
+                    sell_order.volume = Volume::ZERO;
+                    buy_volume -= sell_volume;
                 } else {
-                    // no more orders at the level, we can move to the next level
-                    break;
+                    // fill the buy order, put the order back to the book
+                    let execution = Execution::new(sell_order.id, sell_order.price, buy_volume);
+                    trade.add_execution(execution);
+                    sell_order.volume -= buy_volume;
+                    buy_volume = Volume::ZERO;
                 }
-            }
+                // we should put back the sell order if it was not completely filled
+                if !sell_order.volume.is_zero() {
+                    self.orders.insert(sell_order.id, sell_order);
+                }
+                // if buy order was filled completely, we can break the loop
+                if buy_volume.is_zero() {
+                    break 'top;
+                }
+                // otherwise we still have volume to fill
+            } // no more orders at the level, we can move to the next level
         }
         Ok(trade)
     }
@@ -542,51 +518,42 @@ impl OrderBook {
             .sorted_by(sort_limit_descending);
 
         'top: for l in sorted {
-            loop {
-                // peek order at front of the level
-                if let Some(oid) = l.orders.front() {
-                    // todo: remove might trigger memcpy
-                    // although we need to get the owned value otherwise we will be borrowing self hence problem with borrow checker
-                    let Some(mut buy_order) = self.orders.remove(&oid) else {
-                        // if there is no order then it might have been cancelled
-                        // and removed from the map, and since we pospone the removal of orders from the level
-                        // till we encounter such order, we can safely remove the order from the level
-                        l.orders.pop_front();
-                        continue;
-                    };
-                    let buy_volume = buy_order.volume;
-                    if buy_volume <= sell_volume {
-                        // fill the sell order
-                        trade.add_execution(Execution::new(
-                            buy_order.id,
-                            buy_order.price,
-                            buy_volume.into(),
-                        ));
-                        // remove order from the level
-                        l.orders.pop_front();
-                        l.cancell_order(&buy_order);
-                        buy_order.volume = Volume::ZERO;
-                        sell_volume -= buy_volume;
-                    } else {
-                        // fill the buy order, put the order back to the book
-                        let execution = Execution::new(buy_order.id, buy_order.price, sell_volume);
-                        trade.add_execution(execution);
-                        buy_order.volume -= sell_volume;
-                        sell_volume = Volume::ZERO;
-                    }
-                    // we should put back the sell order if it was not completely filled
-                    if !buy_order.volume.is_zero() {
-                        self.orders.insert(buy_order.id, buy_order);
-                    }
-                    // if sell order was filled completely, we can break the loop
-                    if sell_volume.is_zero() {
-                        break 'top;
-                    }
-                    // otherwise we still have volume to fill
+            // peek order at front of the level
+            while let Some(oid) = l.orders.front() {
+                // todo: remove might trigger memcpy
+                // although we need to get the owned value otherwise we will be borrowing self hence problem with borrow checker
+                let Some(mut buy_order) = self.orders.remove(oid) else {
+                    // if there is no order then it might have been cancelled
+                    // and removed from the map, and since we pospone the removal of orders from the level
+                    // till we encounter such order, we can safely remove the order from the level
+                    l.orders.pop_front();
+                    continue;
+                };
+                let buy_volume = buy_order.volume;
+                if buy_volume <= sell_volume {
+                    // fill the sell order
+                    trade.add_execution(Execution::new(buy_order.id, buy_order.price, buy_volume));
+                    // remove order from the level
+                    l.orders.pop_front();
+                    l.cancell_order(&buy_order);
+                    buy_order.volume = Volume::ZERO;
+                    sell_volume -= buy_volume;
                 } else {
-                    // no more orders at the level, we can move to the next level
-                    break;
+                    // fill the buy order, put the order back to the book
+                    let execution = Execution::new(buy_order.id, buy_order.price, sell_volume);
+                    trade.add_execution(execution);
+                    buy_order.volume -= sell_volume;
+                    sell_volume = Volume::ZERO;
                 }
+                // we should put back the sell order if it was not completely filled
+                if !buy_order.volume.is_zero() {
+                    self.orders.insert(buy_order.id, buy_order);
+                }
+                // if sell order was filled completely, we can break the loop
+                if sell_volume.is_zero() {
+                    break 'top;
+                }
+                // otherwise we still have volume to fill
             }
         }
         Ok(trade)
@@ -629,10 +596,12 @@ impl OrderBook {
 
 // we want to inline since this is a small function and we want to avoid the overhead of a function call
 #[inline]
+#[allow(clippy::needless_lifetimes)]
 fn sort_limit_descending<'a, 'b>(l: &'a &mut Level, r: &'b &mut Level) -> std::cmp::Ordering {
     l.price.cmp(&r.price).reverse()
 }
 #[inline]
+#[allow(clippy::needless_lifetimes)]
 fn filter_limit_for_buy<'a>(l: &'a &mut Level, price: &Option<Price>) -> bool {
     if l.total_volume > 0.into() {
         // in case price is none, we want to return true since we are in market order which has no price
@@ -641,6 +610,7 @@ fn filter_limit_for_buy<'a>(l: &'a &mut Level, price: &Option<Price>) -> bool {
     false
 }
 #[inline]
+#[allow(clippy::needless_lifetimes)]
 fn filter_limit_for_sell<'a>(l: &'a &mut Level, price: &Option<Price>) -> bool {
     if l.total_volume > 0.into() {
         // in case price is none, we want to return true since we are in market order which has no price
@@ -653,7 +623,7 @@ mod tests_limit_map {
 
     #[test]
     fn test_limit_map() {
-        let mut limit_map = crate::Limits::new(crate::OrderSide::Buy);
+        let mut limit_map = crate::Limits::default();
         let order = crate::LimitOrder::new(
             crate::primitives::Oid::new(1),
             crate::OrderSide::Buy,
@@ -669,16 +639,16 @@ mod tests_order_book {
 
     #[test]
     fn test_order_book_new() {
-        let order_book = crate::OrderBook::new();
-        assert_eq!(order_book.bids.side, crate::OrderSide::Buy);
-        assert_eq!(order_book.asks.side, crate::OrderSide::Sell);
+        let order_book = crate::OrderBook::default();
+        assert_eq!(order_book.bids.best, None);
+        assert_eq!(order_book.asks.best, None);
         assert_eq!(order_book.orders.len(), 0);
         assert_eq!(order_book.spread, None);
     }
 
     #[test]
     fn test_cancel_order() {
-        let mut order_book = crate::OrderBook::new();
+        let mut order_book = crate::OrderBook::default();
         let order = &crate::Order::new_limit(
             crate::primitives::Oid::new(1),
             crate::OrderSide::Buy,
@@ -714,7 +684,7 @@ mod tests_order_book {
 
     #[test]
     fn test_execute_buy_order() {
-        let mut order_book = crate::OrderBook::new();
+        let mut order_book = crate::OrderBook::default();
         let order = &crate::Order::new_limit(
             crate::primitives::Oid::new(1),
             crate::OrderSide::Sell,
@@ -766,7 +736,7 @@ mod tests_order_book {
 
     #[test]
     fn test_market_order_should_result_in_empty_order_book() {
-        let mut order_book = crate::OrderBook::new();
+        let mut order_book = crate::OrderBook::default();
         let order = &crate::Order::new_limit(
             crate::primitives::Oid::new(1),
             crate::OrderSide::Sell,
@@ -810,7 +780,7 @@ mod tests_order_book {
 
     #[test]
     fn test_sell_market_order_should_result_in_empty_order_book() {
-        let mut order_book = crate::OrderBook::new();
+        let mut order_book = crate::OrderBook::default();
         let order = &crate::Order::new_limit(
             crate::primitives::Oid::new(1),
             crate::OrderSide::Buy,

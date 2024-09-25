@@ -73,7 +73,7 @@ fn setup_orders(num_orders: u64) -> Vec<Order> {
         black_box(id.into()),
         black_box(OrderSide::Sell),
         black_box(chrono::Utc::now().into()),
-        black_box(buy_volume).into(),
+        black_box(buy_volume),
     ));
 
     id += 1;
@@ -83,7 +83,7 @@ fn setup_orders(num_orders: u64) -> Vec<Order> {
         black_box(id.into()),
         black_box(OrderSide::Buy),
         black_box(chrono::Utc::now().into()),
-        black_box(sell_volume).into(),
+        black_box(sell_volume),
     ));
 
     orders
@@ -93,9 +93,9 @@ fn bench_order_matching(c: &mut Criterion) {
     let orders = setup_orders(10000);
     c.bench_function("order_matching", |b| {
         b.iter(|| {
-            let mut order_book = OrderBook::new();
+            let mut order_book = OrderBook::default();
             for order in orders.iter() {
-                let _ = order_book.execute(&order);
+                let _ = order_book.execute(order);
             }
         })
     });

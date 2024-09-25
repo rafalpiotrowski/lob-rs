@@ -1,44 +1,10 @@
 //!
-//!
+//! This module contains all the basic primitives that makes up the core of the order book
 
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 use std::iter::Sum;
 use std::ops::{Add, AddAssign, Sub, SubAssign};
-
-use crate::utils::combine_integer_and_fractional;
-
-/// Integer Limit Part
-#[derive(Debug, PartialEq, Eq, PartialOrd, Clone, Copy, Hash)]
-pub struct IntegerLimitPart(u64);
-
-/// Fractional Limit Part
-#[derive(Debug, PartialEq, Eq, PartialOrd, Clone, Copy, Hash)]
-pub struct FractionalLimitPart(u64);
-
-impl From<u64> for IntegerLimitPart {
-    fn from(value: u64) -> Self {
-        IntegerLimitPart(value)
-    }
-}
-
-impl From<u64> for FractionalLimitPart {
-    fn from(value: u64) -> Self {
-        FractionalLimitPart(value)
-    }
-}
-
-impl From<IntegerLimitPart> for u64 {
-    fn from(value: IntegerLimitPart) -> Self {
-        value.0
-    }
-}
-
-impl From<FractionalLimitPart> for u64 {
-    fn from(value: FractionalLimitPart) -> Self {
-        value.0
-    }
-}
 
 /// Order side
 #[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
@@ -117,7 +83,7 @@ impl Hash for Price {
 
 impl PartialOrd for Price {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.0.partial_cmp(&other.0)
+        Some(self.cmp(other))
     }
 }
 
@@ -165,33 +131,6 @@ impl From<Price> for f64 {
 impl From<f64> for Price {
     fn from(value: f64) -> Self {
         Price(value)
-    }
-}
-
-/// Precision
-#[derive(Debug, PartialEq, PartialOrd, Clone, Copy, Eq, Ord, Hash)]
-pub struct Precision(u32);
-
-impl From<u32> for Precision {
-    fn from(value: u32) -> Self {
-        Precision(value)
-    }
-}
-
-impl From<Precision> for u32 {
-    fn from(value: Precision) -> Self {
-        value.0
-    }
-}
-
-impl From<(IntegerLimitPart, FractionalLimitPart, Precision)> for Price {
-    fn from(value: (IntegerLimitPart, FractionalLimitPart, Precision)) -> Self {
-        //todo: make this configurable based on precision we want to support
-        Price(combine_integer_and_fractional(
-            value.0.into(),
-            value.1.into(),
-            value.2.into(),
-        ))
     }
 }
 
