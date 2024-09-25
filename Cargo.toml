@@ -2,6 +2,18 @@
 name = "lob"
 version = "0.1.0"
 edition = "2021"
+authors = [
+    "Rafal Piotrowski"
+]
+license = "Apache-2.0 or MIT"
+description = "Limit OrderBook"
+readme = "README.md"
+repository = "https://github.com/rafalpiotrowski/lob-rs"
+keywords = [ "finance", "orderbook", "trading", "HFT", "exchange" ]
+categories = [ "finance" ]
+
+[badges]
+maintenance = { status = "actively-developed" }
 
 [[bench]]
 name = "lob_benchmark"
@@ -10,12 +22,12 @@ harness = false
 [dependencies]
 chrono = "0.4.38"
 itertools = "0.13.0"
-rand = "0.8.5"
 stable-vec = "0.4.1"
 thiserror = "1.0.64"
 
 [dev-dependencies]
 criterion = "0.5.1"
+rand = "0.8.5"
 
 [profile.bench]
 debug = true
