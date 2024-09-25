@@ -1,3 +1,7 @@
+[![Crates.io](https://img.shields.io/crates/v/lob)](https://crates.io/crates/lob)
+[![minimum rustc version](https://img.shields.io/badge/rustc-1.64+-green.svg)](https://blog.rust-lang.org/2019/11/07/Rust-1.64.0.html)
+[![Build Status](https://github.com/rafalpiotrowski/lob-rs/actions/workflows/main.yml/badge.svg?branch=main)](https://github.com/rafalpiotrowski/lob-rs)
+
 # Limit Order Book
 
 ## Orders Types
