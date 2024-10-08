@@ -152,7 +152,7 @@ impl From<f64> for Price {
 }
 
 /// Volume
-#[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
+#[derive(Debug, PartialEq, PartialOrd, Clone, Copy, Eq, Ord)]
 pub struct Volume(u64);
 
 impl Volume {
@@ -210,6 +210,20 @@ impl std::ops::Sub for Volume {
 impl Sum for Volume {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.fold(0.into(), |acc, x| acc + x)
+    }
+}
+
+impl Deref for Volume {
+    type Target = u64;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for Volume {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 

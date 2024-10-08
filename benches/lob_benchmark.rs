@@ -55,36 +55,36 @@ fn setup_orders(num_orders: u64) -> Vec<Order> {
     // create orders that will be matched with the stable list of orders
     // and the result should be empty order book
 
-    let mut id = num_orders + 1;
+    // let mut id = num_orders + 1;
 
-    let buy_volume = orders
-        .iter()
-        .filter(|o| o.side == OrderSide::Buy)
-        .map(|o| o.volume)
-        .sum::<Volume>();
-    let sell_volume = orders
-        .iter()
-        .filter(|o| o.side == OrderSide::Sell)
-        .map(|o| o.volume)
-        .sum::<Volume>();
+    // let buy_volume = orders
+    //     .iter()
+    //     .filter(|o| o.side == OrderSide::Buy)
+    //     .map(|o| o.volume)
+    //     .sum::<Volume>();
+    // let sell_volume = orders
+    //     .iter()
+    //     .filter(|o| o.side == OrderSide::Sell)
+    //     .map(|o| o.volume)
+    //     .sum::<Volume>();
 
-    // add sell market order that will be matched with all buy orders
-    orders.push(Order::new_market(
-        black_box(id.into()),
-        black_box(OrderSide::Sell),
-        black_box(chrono::Utc::now().into()),
-        black_box(buy_volume),
-    ));
+    // // add sell market order that will be matched with all buy orders
+    // orders.push(Order::new_market(
+    //     black_box(id.into()),
+    //     black_box(OrderSide::Sell),
+    //     black_box(chrono::Utc::now().into()),
+    //     black_box(buy_volume),
+    // ));
 
-    id += 1;
+    // id += 1;
 
-    // add buy market order that will be matched with all sell orders
-    orders.push(Order::new_market(
-        black_box(id.into()),
-        black_box(OrderSide::Buy),
-        black_box(chrono::Utc::now().into()),
-        black_box(sell_volume),
-    ));
+    // // add buy market order that will be matched with all sell orders
+    // orders.push(Order::new_market(
+    //     black_box(id.into()),
+    //     black_box(OrderSide::Buy),
+    //     black_box(chrono::Utc::now().into()),
+    //     black_box(sell_volume),
+    // ));
 
     orders
 }
@@ -95,7 +95,8 @@ fn bench_order_matching(c: &mut Criterion) {
         b.iter(|| {
             let mut order_book = OrderBook::default();
             for order in orders.iter() {
-                let _ = order_book.execute(order);
+                order_book.add_order(order.try_into().unwrap());
+                order_book.match_orders();
             }
         })
     });
