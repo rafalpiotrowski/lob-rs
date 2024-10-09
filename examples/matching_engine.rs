@@ -1,6 +1,16 @@
+///! Matching engine example
+///
+/// To run the example specify the CPU id to run the matching engine on.
+/// If no cpu is specified the matching engine will run on the first available CPU.
+///
+/// ```bash
+/// RUST_LOG=info cargo run --example matching_engine -- --cpu-id 2
+/// ```
+///
 use glommio::prelude::*;
 use std::collections::VecDeque;
 use thiserror::Error;
+use tracing::info;
 
 use clap::{command, Parser};
 use std::sync::atomic::Ordering;
@@ -23,8 +33,6 @@ struct Args {
 }
 
 pub fn main() -> std::io::Result<()> {
-    println!("Welcome to the exchange! Gateway to MatchingEngine!");
-
     tracing_subscriber::fmt()
         .pretty()
         .with_thread_names(true)
@@ -33,8 +41,10 @@ pub fn main() -> std::io::Result<()> {
         // sets this to be the default, global collector for this application.
         .init();
 
+    info!("Welcome to the exchange! Gateway to MatchingEngine!");
+
     ctrlc::set_handler(move || {
-        println!("received Ctrl+C!");
+        info!("received Ctrl+C!");
         sig_int_handler();
     })
     .expect("Error setting Ctrl-C handler");
@@ -45,20 +55,17 @@ pub fn main() -> std::io::Result<()> {
 
     let builder = LocalExecutorBuilder::new(cpu_placement.clone()).name("matching-engine");
     let handle = builder.spawn(|| async move {
-        tracing::info!("Done!");
+        std::thread::sleep(std::time::Duration::from_secs(10));
+        info!("Done!");
     })?;
 
-    tracing::info!("MatchingEngine running on CPU {:?}", cpu_placement);
+    info!("MatchingEngine running on CPU {:?}", cpu_placement);
 
     handle.join().unwrap();
 
-    tracing::info!("Goodbye!");
+    info!("Goodbye!");
 
     Ok(())
-}
-
-pub trait Matching {
-    fn match_orders(&mut self) -> Vec<Trade>;
 }
 
 #[derive(Debug, Default)]
