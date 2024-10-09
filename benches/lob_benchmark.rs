@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use lob::{Order, OrderBook, OrderSide, Volume};
+use lob::{Order, OrderBook, OrderSide};
 
 // create num_orders orders
 // buy orders will have even ids, sell orders will have odd ids
@@ -96,7 +96,7 @@ fn bench_order_matching(c: &mut Criterion) {
             let mut order_book = OrderBook::default();
             for order in orders.iter() {
                 order_book.add_order(order.try_into().unwrap());
-                order_book.match_orders();
+                let _ = order_book.find_and_fill_best_orders();
             }
         })
     });

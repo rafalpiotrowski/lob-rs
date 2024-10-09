@@ -1,16 +1,67 @@
+use glommio::prelude::*;
 use std::collections::VecDeque;
 use thiserror::Error;
 
-use lob::{LimitOrder, Oid, Order, OrderBook, OrderBookError, OrderSide, OrderType, Price, Volume};
+use clap::{command, Parser};
+use std::sync::atomic::Ordering;
+use std::sync::{atomic::AtomicBool, LazyLock};
+use tracing_subscriber::EnvFilter;
 
-pub fn main() {
-    let _ = Exchange::new();
+use lob::{Fill, LimitOrder, Oid, Order, OrderBook, OrderBookError, OrderType, Price, Volume};
+
+static RUNNING: LazyLock<AtomicBool> = LazyLock::new(|| AtomicBool::from(true));
+
+fn sig_int_handler() {
+    RUNNING.store(false, Ordering::SeqCst);
+}
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    #[arg(short, long)]
+    cpu_id: Option<usize>,
+}
+
+pub fn main() -> std::io::Result<()> {
+    println!("Welcome to the exchange! Gateway to MatchingEngine!");
+
+    tracing_subscriber::fmt()
+        .pretty()
+        .with_thread_names(true)
+        // enable everything
+        .with_env_filter(EnvFilter::from_default_env())
+        // sets this to be the default, global collector for this application.
+        .init();
+
+    ctrlc::set_handler(move || {
+        println!("received Ctrl+C!");
+        sig_int_handler();
+    })
+    .expect("Error setting Ctrl-C handler");
+
+    let args = Args::parse();
+
+    let cpu_placement = args.cpu_id.map_or(Placement::Unbound, Placement::Fixed);
+
+    let builder = LocalExecutorBuilder::new(cpu_placement.clone()).name("matching-engine");
+    let handle = builder.spawn(|| async move {
+        tracing::info!("Done!");
+    })?;
+
+    tracing::info!("MatchingEngine running on CPU {:?}", cpu_placement);
+
+    handle.join().unwrap();
+
+    tracing::info!("Goodbye!");
+
+    Ok(())
 }
 
 pub trait Matching {
     fn match_orders(&mut self) -> Vec<Trade>;
 }
 
+#[derive(Debug, Default)]
 pub struct MatchingEngine {
     order_book: OrderBook,
     min_price: Price,
@@ -19,6 +70,7 @@ pub struct MatchingEngine {
     market_orders: VecDeque<Order>,
 }
 
+#[derive(Debug, Default)]
 pub struct Exchange {
     matching_engine: MatchingEngine,
 }
@@ -46,35 +98,33 @@ pub enum MatchingEngineError {
 }
 
 impl Exchange {
-    pub fn new() -> Self {
-        Self {
-            matching_engine: MatchingEngine::new(),
-        }
+    pub fn initialize(&mut self) {
+        self.matching_engine.set_min_price(Price::MIN);
+        self.matching_engine.set_max_price(Price::MAX);
     }
+
     pub fn place_order_single(&mut self, order: Order) -> Result<(), ExchangeError> {
         // place a single order in a proper matching engine for later matching
         self.matching_engine.place_order(order)?;
+
         Ok(())
     }
 }
 
 impl MatchingEngine {
-    pub fn new() -> Self {
-        Self {
-            order_book: OrderBook::default(),
-            min_price: Price(f64::MIN),
-            max_price: Price(f64::MAX),
-            market_orders: VecDeque::new(),
-        }
+    pub fn set_min_price(&mut self, price: Price) {
+        self.min_price = price;
     }
 
-    pub fn had_market_orders(&self) -> bool {
+    pub fn set_max_price(&mut self, price: Price) {
+        self.max_price = price;
+    }
+
+    pub fn has_market_orders(&self) -> bool {
         !self.market_orders.is_empty()
     }
 
     pub fn place_order(&mut self, order: Order) -> Result<(), MatchingEngineError> {
-        // this is the entry point to matching engine
-        // if exchange for example
         if order.kind == OrderType::Limit {
             if order.price.is_none() {
                 return Err(MatchingEngineError::MissingPriceError());
@@ -91,35 +141,22 @@ impl MatchingEngine {
             // market order
             self.market_orders.push_back(order);
         }
-
         Ok(())
     }
-
-    // pub fn pop_and_match_first_market_order(&mut self) -> Result<Trade, MatchingEngineError> {
-    //     let Some(order) = self.market_orders.pop_front() else {
-    //         return Err(MatchingEngineError::NoMarketOrdersError());
-    //     };
-
-    //     let trade = Trade::new(order.id, order.volume);
-    //     let trade = match order.side {
-    //         OrderSide::Buy => self.order_book.fill_buy_order(trade, order.price),
-    //         OrderSide::Sell => self.order_book.fill_sell_order(trade, order.price),
-    //     }?;
-    //     Ok(trade)
-    // }
 
     pub fn can_match_orders(&self) -> bool {
         let best_buy = self.order_book.get_best_buy();
         let best_sell = self.order_book.get_best_sell();
-        best_sell.is_some() && best_buy.is_some()
+        match (best_buy, best_sell) {
+            (Some(buy_price), Some(sell_price)) => buy_price >= sell_price,
+            _ => false,
+        }
     }
 
-    pub fn match_orders(&mut self) -> Result<(), MatchingEngineError> {
-        if !self.can_match_orders() {
-            return Err(MatchingEngineError::NoOrdersToMatchError());
-        }
-        self.order_book.match_orders();
-        Ok(())
+    pub fn match_orders(&mut self) -> Result<Fill, MatchingEngineError> {
+        self.order_book
+            .find_and_fill_best_orders()
+            .map_err(|e| e.into())
     }
 
     // fn match_buy_side(&mut self) -> Result<Trade, PlaceOrderError> {

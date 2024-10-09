@@ -60,7 +60,7 @@ impl Level {
         Level {
             index: None,
             price,
-            total_volume: 0.into(),
+            total_volume: Volume::ZERO,
             orders: VecDeque::new(),
         }
     }
@@ -269,6 +269,14 @@ pub struct Fill {
     pub volume: Volume,
 }
 
+#[derive(Debug, Clone)]
+pub struct FillAtMarket {
+    pub market_order_id: Oid,
+    pub order_id: Oid,
+    pub order_price: Price,
+    pub filled_volume: Volume,
+}
+
 /// Limit Order Book
 /// Trades are made when highest bid Limit is greater than or equal to the lowest ask Limit (spread is crossed)
 /// If order cannot be filled immediately, it is added to the book
@@ -395,7 +403,7 @@ impl OrderBook {
             .map(|index| limit_map.levels[**index].total_volume)
     }
 
-    pub fn match_orders(&mut self) -> Result<Fill, OrderBookError> {
+    pub fn find_and_fill_best_orders(&mut self) -> Result<Fill, OrderBookError> {
         let fill = self.find_and_fill()?;
 
         self.remove_or_update_filled_orders(&fill);
@@ -417,21 +425,21 @@ impl OrderBook {
         // check if the orders should be removed
         // otherwise we need to update the order volume
 
-        let mut buy_order_to_cancell = None;
-        let mut sell_order_to_cancell = None;
+        let mut buy_order_to_cancel = None;
+        let mut sell_order_to_cancel = None;
 
         if let Some(buy_order) = self.orders.get_mut(&fill.buy_order_id) {
             let buy_volume = buy_order.volume - buy_order.filled_volume.unwrap_or(Volume::ZERO);
 
             if buy_volume == fill.volume {
-                buy_order_to_cancell = self.orders.remove(&fill.buy_order_id);
+                buy_order_to_cancel = self.orders.remove(&fill.buy_order_id);
             } else {
                 buy_order.filled_volume =
                     Some(buy_order.filled_volume.unwrap_or(Volume::ZERO) + fill.volume);
             }
         }
 
-        if let Some(order) = buy_order_to_cancell {
+        if let Some(order) = buy_order_to_cancel {
             self.bids.cancel_order(&order);
         }
 
@@ -439,14 +447,14 @@ impl OrderBook {
             let sell_volume = sell_order.volume - sell_order.filled_volume.unwrap_or(Volume::ZERO);
 
             if sell_volume == fill.volume {
-                sell_order_to_cancell = self.orders.remove(&fill.sell_order_id);
+                sell_order_to_cancel = self.orders.remove(&fill.sell_order_id);
             } else {
                 sell_order.filled_volume =
                     Some(sell_order.filled_volume.unwrap_or(Volume::ZERO) + fill.volume);
             }
         }
 
-        if let Some(order) = sell_order_to_cancell {
+        if let Some(order) = sell_order_to_cancel {
             self.asks.cancel_order(&order);
         }
     }
@@ -529,22 +537,209 @@ impl OrderBook {
                 } else {
                     best_buy_level.reduce_volume(volume);
                 }
-                // if best_buy_level.total_volume.is_zero() {
-                //     self.bids.best = None;
-                // }
 
                 if sell_volume == volume {
                     best_sell_level.orders.pop_front();
                 } else {
                     best_sell_level.reduce_volume(volume);
                 }
-                // if best_sell_level.total_volume.is_zero() {
-                //     self.asks.best = None;
-                // }
 
                 return Ok(fill);
             }
             break;
+        }
+
+        Err(OrderBookError::NoOrderToMatch)
+    }
+
+    pub fn fill_market_order(&mut self, order: &Order) -> Result<FillAtMarket, OrderBookError> {
+        match order.side {
+            OrderSide::Buy => self.fill_buy_market_order(order),
+            OrderSide::Sell => self.fill_sell_market_order(order),
+        }
+    }
+
+    fn fill_buy_market_order(&mut self, order: &Order) -> Result<FillAtMarket, OrderBookError> {
+        let Some(best_level_index) = self.asks.get_best() else {
+            return Err(OrderBookError::NoOrderToMatch);
+        };
+        let Ok(fill) = self.fill_buy_market_order_from_sell_level(order, best_level_index) else {
+            // this means that there was no order to match at the current level
+            // this should never happen therefore, and this means that OrderBook is corrupted
+            panic!("OrderBook is corrupted");
+        };
+
+        // update levels
+        let Some(filled_order) = self.orders.get_mut(&fill.order_id) else {
+            // this should never happen, as we have just filled the order
+            panic!("OrderBook is corrupted");
+        };
+
+        if filled_order.volume == filled_order.filled_volume.unwrap_or(Volume::ZERO) {
+            self.asks.cancel_order(filled_order);
+            // check if we need to update best sell
+
+            if self.asks.best.is_none() {
+                self.update_best_sell();
+            }
+        } else {
+            // update the level volume
+            // but this was already done when we filled the order and order has not been fully filled
+            // this is since we already had mut ref to level
+        }
+
+        Ok(fill)
+    }
+
+    fn fill_sell_market_order(&mut self, order: &Order) -> Result<FillAtMarket, OrderBookError> {
+        let Some(best_level_index) = self.bids.get_best() else {
+            return Err(OrderBookError::NoOrderToMatch);
+        };
+        let Ok(fill) = self.fill_sell_market_order_from_buy_level(order, best_level_index) else {
+            // this means that there was no order to match at the current level
+            // this should never happen therefore, and this means that OrderBook is corrupted
+            panic!("OrderBook is corrupted");
+        };
+
+        // update levels
+        let Some(filled_order) = self.orders.get_mut(&fill.order_id) else {
+            // this should never happen, as we have just filled the order
+            panic!("OrderBook is corrupted");
+        };
+
+        if filled_order.volume == filled_order.filled_volume.unwrap_or(Volume::ZERO) {
+            self.bids.cancel_order(filled_order);
+            // check if we need to update best sell
+
+            if self.bids.best.is_none() {
+                self.update_best_buy();
+            }
+        } else {
+            // update the level volume
+            // but this was already done when we filled the order and order has not been fully filled
+            // this is since we already had mut ref to level
+        }
+
+        Ok(fill)
+    }
+
+    fn fill_sell_market_order_from_buy_level(
+        &mut self,
+        market_order: &Order,
+        level_index: LevelIndex,
+    ) -> Result<FillAtMarket, OrderBookError> {
+        let Some(level) = self.bids.levels.get_mut(level_index) else {
+            return Err(OrderBookError::NoOrderToMatch);
+        };
+        // peek order at front of the level
+        while let Some(limit_order_oid) = level.orders.front() {
+            let Some(limit_order) = self.orders.get_mut(limit_order_oid) else {
+                // if there is no order then it might have been cancelled
+                // and removed from the map, and since we pospone the removal of orders from the level
+                // till we encounter such order, we can safely remove the order from the level
+                level.orders.pop_front();
+                continue;
+            };
+            let remaining_limit_volume =
+                limit_order.volume - limit_order.filled_volume.unwrap_or(Volume::ZERO);
+            let market_order_volume = market_order.volume;
+            if remaining_limit_volume <= market_order_volume {
+                // fully fill the buy limit order from order book
+                let fill = FillAtMarket {
+                    market_order_id: market_order.id,
+                    order_id: limit_order.id,
+                    order_price: limit_order.price,
+                    filled_volume: remaining_limit_volume,
+                };
+                // remove buy limit order from the level
+                level.orders.pop_front();
+                limit_order.filled_volume = Some(
+                    limit_order.filled_volume.unwrap_or(Volume::ZERO) + remaining_limit_volume,
+                );
+                // sanity check
+                if limit_order.volume != limit_order.filled_volume.unwrap_or(Volume::ZERO) {
+                    panic!("OrderBook is corrupted");
+                }
+                return Ok(fill);
+            } else {
+                // buy limit order not fully filled
+                let fill = FillAtMarket {
+                    market_order_id: market_order.id,
+                    order_id: limit_order.id,
+                    order_price: limit_order.price,
+                    filled_volume: remaining_limit_volume,
+                };
+                limit_order.filled_volume = Some(
+                    limit_order.filled_volume.unwrap_or(Volume::ZERO) + remaining_limit_volume,
+                );
+                // sanity check
+                if limit_order.volume < limit_order.filled_volume.unwrap_or(Volume::ZERO) {
+                    panic!("OrderBook is corrupted");
+                }
+                level.reduce_volume(remaining_limit_volume);
+                return Ok(fill);
+            }
+        }
+
+        Err(OrderBookError::NoOrderToMatch)
+    }
+
+    fn fill_buy_market_order_from_sell_level(
+        &mut self,
+        market_order: &Order,
+        level_index: LevelIndex,
+    ) -> Result<FillAtMarket, OrderBookError> {
+        let Some(level) = self.bids.levels.get_mut(level_index) else {
+            return Err(OrderBookError::NoOrderToMatch);
+        };
+        // peek order at front of the level
+        while let Some(limit_order_oid) = level.orders.front() {
+            let Some(limit_order) = self.orders.get_mut(limit_order_oid) else {
+                // if there is no order then it might have been cancelled
+                // and removed from the map, and since we pospone the removal of orders from the level
+                // till we encounter such order, we can safely remove the order from the level
+                level.orders.pop_front();
+                continue;
+            };
+            let remaining_limit_volume =
+                limit_order.volume - limit_order.filled_volume.unwrap_or(Volume::ZERO);
+            let market_order_volume = market_order.volume;
+            if remaining_limit_volume <= market_order_volume {
+                // fully fill the buy limit order from order book
+                let fill = FillAtMarket {
+                    market_order_id: market_order.id,
+                    order_id: limit_order.id,
+                    order_price: limit_order.price,
+                    filled_volume: remaining_limit_volume,
+                };
+                // remove buy limit order from the level
+                level.orders.pop_front();
+                limit_order.filled_volume = Some(
+                    limit_order.filled_volume.unwrap_or(Volume::ZERO) + remaining_limit_volume,
+                );
+                // sanity check
+                if limit_order.volume != limit_order.filled_volume.unwrap_or(Volume::ZERO) {
+                    panic!("OrderBook is corrupted");
+                }
+                return Ok(fill);
+            } else {
+                // buy limit order not fully filled
+                let fill = FillAtMarket {
+                    market_order_id: market_order.id,
+                    order_id: limit_order.id,
+                    order_price: limit_order.price,
+                    filled_volume: remaining_limit_volume,
+                };
+                limit_order.filled_volume = Some(
+                    limit_order.filled_volume.unwrap_or(Volume::ZERO) + remaining_limit_volume,
+                );
+                // sanity check
+                if limit_order.volume < limit_order.filled_volume.unwrap_or(Volume::ZERO) {
+                    panic!("OrderBook is corrupted");
+                }
+                level.reduce_volume(remaining_limit_volume);
+                return Ok(fill);
+            }
         }
 
         Err(OrderBookError::NoOrderToMatch)
@@ -901,7 +1096,7 @@ mod tests_order_book {
             100.into(),
         );
         order_book.add_order(order.try_into().unwrap());
-        let fill_result = order_book.match_orders();
+        let fill_result = order_book.find_and_fill_best_orders();
         assert!(fill_result.is_err());
         assert_eq!(fill_result.unwrap_err(), OrderBookError::NoOrderToMatch);
         assert_eq!(order_book.get_best_sell(), Some(21.0.into()));
@@ -916,7 +1111,7 @@ mod tests_order_book {
         order_book.add_order(order.try_into().unwrap());
         assert_eq!(order_book.get_best_buy(), Some(22.0.into()));
 
-        let fill = order_book.match_orders().unwrap();
+        let fill = order_book.find_and_fill_best_orders().unwrap();
         assert_eq!(fill.buy_order_id, Oid::new(3));
         assert_eq!(fill.sell_order_id, Oid::new(1));
         assert_eq!(fill.volume, 50.into());
@@ -937,7 +1132,7 @@ mod tests_order_book {
         );
         order_book.add_order(order.try_into().unwrap());
 
-        let fill = order_book.match_orders().unwrap();
+        let fill = order_book.find_and_fill_best_orders().unwrap();
         assert_eq!(fill.buy_order_id, Oid::new(2));
         assert_eq!(fill.sell_order_id, Oid::new(1));
         assert_eq!(fill.volume, 50.into());
@@ -958,7 +1153,7 @@ mod tests_order_book {
         );
         order_book.add_order(order.try_into().unwrap());
 
-        let fill = order_book.match_orders().unwrap();
+        let fill = order_book.find_and_fill_best_orders().unwrap();
         assert_eq!(fill.buy_order_id, Oid::new(2));
         assert_eq!(fill.sell_order_id, Oid::new(4));
         assert_eq!(fill.volume, 75.into());

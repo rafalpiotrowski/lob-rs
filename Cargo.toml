@@ -28,6 +28,11 @@ thiserror = "1.0.64"
 [dev-dependencies]
 criterion = "0.5.1"
 rand = "0.8.5"
+glommio = "0.9.0"
+ctrlc = "3.4.5"
+clap = { version = "4.5.20", features = ["derive"] }
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
 
 [profile.bench]
 debug = true

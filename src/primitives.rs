@@ -78,10 +78,22 @@ impl From<chrono::DateTime<chrono::Utc>> for Timestamp {
 
 /// Price
 #[derive(Debug, Clone, Copy)]
-pub struct Price(pub f64);
+pub struct Price(f64);
 
 impl Price {
     pub const ZERO: Self = Price(0.0);
+    pub const MAX: Self = Price(f64::MAX);
+    pub const MIN: Self = Price(f64::MIN);
+
+    pub fn new(value: f64) -> Self {
+        Self(value)
+    }
+}
+
+impl Default for Price {
+    fn default() -> Self {
+        Price::ZERO
+    }
 }
 
 impl Eq for Price {}
@@ -148,6 +160,20 @@ impl From<Price> for f64 {
 impl From<f64> for Price {
     fn from(value: f64) -> Self {
         Price(value)
+    }
+}
+
+impl Deref for Price {
+    type Target = f64;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for Price {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
